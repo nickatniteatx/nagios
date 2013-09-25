@@ -1,0 +1,48 @@
+#!/bin/sh
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+export PATH
+
+LIST=$(virsh list --all | sed '1,2d' | sed '/^$/d'| awk '{print $2":"$3}')
+
+if [ ! "$LIST" ]; then
+  EXITVAL=3 #Status 3 = UNKNOWN (orange) 
+  echo "Unknown guests"
+  exit $EXITVAL
+fi
+
+OK=0
+WARN=0
+CRIT=0
+NUM=0
+
+for host in $(echo $LIST)
+do
+  name=$(echo $host | awk -F: '{print $1}')
+  state=$(echo $host | awk -F: '{print $2}')
+  NUM=$(expr $NUM + 1)
+
+  case "$state" in
+    running|blocked) OK=$(expr $OK + 1) ;;
+    paused) WARN=$(expr $WARN + 1) ;;
+    shutdown|shut*|crashed) CRIT=$(expr $CRIT + 1) ;;
+    *) CRIT=$(expr $CRIT + 1) ;;
+  esac
+done
+
+if [ "$NUM" -eq "$OK" ]; then
+  EXITVAL=0 #Status 0 = OK (green)
+fi
+
+if [ "$WARN" -gt 0 ]; then
+  EXITVAL=1 #Status 1 = WARNING (yellow)
+fi
+
+if [ "$CRIT" -gt 0 ]; then
+  EXITVAL=2 #Status 2 = CRITICAL (red)
+fi
+
+echo hosts:$NUM OK:$OK WARN:$WARN CRIT:$CRIT - $LIST
+
+exit $EXITVAL
+

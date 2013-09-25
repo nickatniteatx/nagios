@@ -1,0 +1,105 @@
+#!/bin/bash
+# Servicestate description can have a http-link to the openvz-wiki
+# in case that a ressource is warning/critical. To use it:
+# 1. set "escape_html_tags=0" in nagios/etc/cgi.cfg
+# 2. set "my $linked=1;" in the first perl lines in this script
+#
+export FILE=/tmp/check_ubc
+RET=0
+ubc_file='/proc/user_beancounters';
+DATA='';
+if [ -r $ubc_file ]; then
+        DATA=`cat $ubc_file`
+fi
+if [ -z "$DATA" ]; then
+        echo "UNKNOWN - $ubc_file is not readable or empty. Maybe it is only readable for root and this script should be called by sudo.";
+        exit 3;
+fi
+ 
+if [ -f $FILE ]; then
+echo "$DATA" | perl  -n -e'
+use Data::Dumper;
+my $linked=1;   # 0:plain text output, 1:resourcename is a http-link to OpenVZ-wiki
+my $file=$ENV{"FILE"};
+my $ret=0 ;
+my $vid ;
+my $resource ;
+my $held ;
+my $maxheld ;
+my $barrier ;
+my $limit ;
+my $failcnt ;
+my %beancounters ;
+my %beancounters_old ;
+while(<STDIN>){
+        my %vmachine;
+        if ( /\D*(\d+):.*/ ){ $vid=$1; $beancounters{$vid}=\%vmachine ; }
+        if ( /^[\W\d]+([a-z]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+).*/ ) {
+                $resource=$1 ;
+                $held=$2 ;
+                $maxheld=$3 ;
+                $barrier=$4 ;
+                $limit=$5 ;
+                $failcnt=$6 ;
+                ${beancounters{$vid}}{$resource}=[$held , $maxheld , $barrier , $limit ,$failcnt ];
+                if ( ($held  > $barrier) && ($barrier != 0) ) {
+                        print "WARNING: Limits on $vid: ".&url($resource,$linked)."  held->$held , barrier->$barrier ( limit->$limit ) " ;
+                        $ret=1;
+                }
+                                #print "$vid:$resource $held Barrier:$barrier ";
+        }
+}
+ 
+# read and parse old data
+open(MYINPUTFILE, "<$file");
+while(<MYINPUTFILE>){
+        my %vmachine;
+        if ( /\D*(\d+):.*/ ){ $vid=$1; $beancounters_old{$vid}=\%vmachine ; }
+        if ( /^[\W\d]+([a-z]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+).*/ ) {
+                $resource=$1 ;
+                $held=$2 ;
+                $maxheld=$3 ;
+                $barrier=$4 ;
+                $limit=$5 ;
+                $failcnt=$6 ;
+                ${beancounters_old{$vid}}{$resource}=[$held , $maxheld , $barrier , $limit ,$failcnt ];
+        }
+}
+ 
+foreach my $vmachine_id (keys %beancounters) {
+        foreach my $resource (keys %{$beancounters{$vmachine_id}} ) {
+                if ( defined($beancounters{$vmachine_id}{$resource}[4]) && defined($beancounters_old{$vmachine_id}{$resource}[4]) ){
+                        my $failcnt=$beancounters{$vmachine_id}{$resource}[4];
+                        my $failcnt_old=$beancounters_old{$vmachine_id}{$resource}[4];
+                        my $held=$beancounters{$vmachine_id}{$resource}[0];
+                        my $maxheld=$beancounters{$vmachine_id}{$resource}[1];
+                        my $barrier=$beancounters{$vmachine_id}{$resource}[2];
+                        my $limit=$beancounters{$vmachine_id}{$resource}[3];
+                        if ( $failcnt_old < $failcnt ){
+                                print "CRITICAL: Incrased failcnt  $vmachine_id: ".url($resource,$linked)." from $failcnt_old to $failcnt (held->$held , maxheld->$maxheld , barrier->$barrier , limit->$limit ) " ;
+                                $ret=2;
+                        }
+                                                #print "$vmachine_id: Old_Failcnt: $failcnt_old Failcnt: $failcnt \n";
+                }
+        }
+ 
+}
+sub url {
+        my ($name,$with_link) = @_;
+        if ($with_link) {
+                return "<a target=\"_blank\" href=\"http://wiki.openvz.org/".$name."#".$name."\">$name</a>";
+        } else {
+                return $name;
+        }
+}
+if ($ret == 0 ) { print "OK. \n" ; }
+# print Dumper(%beancounters_old) ;
+# print "\n";
+exit($ret);
+'
+ 
+RET=$?
+fi
+ 
+echo "$DATA" > $FILE
+exit $RET
